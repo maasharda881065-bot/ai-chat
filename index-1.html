@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Voice Chat</title>
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0b1020"><link rel="icon" href="icon-192.png">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#f4f7ff;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:720px;margin:auto;padding:18px 14px 30px}.card{background:#151d31;border:1px solid #26334e;border-radius:18px;padding:16px;margin:12px 0}
+h1{font-size:22px;margin:8px 0}p{color:#b8c5dd}.status{text-align:center;font-weight:700;color:#9fb5ff}
+.visual{height:210px;display:flex;align-items:center;justify-content:center}.orb{width:145px;height:145px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#a6d9ff,#4b70ff 40%,#182b68 75%);box-shadow:0 0 35px #5478ff66;transition:.3s;cursor:pointer}
+.orb.listen{animation:pulse 1.1s infinite}.orb.think{background:radial-gradient(circle,#f7d38b,#bd6bff 55%,#30225d);animation:spin 2.5s infinite linear}.orb.speak{background:radial-gradient(circle at 35% 30%,#a8ffe3,#20c9a1 50%,#115b77);animation:pulse .45s infinite}
+@keyframes pulse{0%,100%{transform:scale(.94);box-shadow:0 0 22px #5478ff66}50%{transform:scale(1.08);box-shadow:0 0 55px #5478ffcc}}
+@keyframes spin{to{filter:hue-rotate(360deg)}}
+label{display:block;font-size:13px;color:#b8c5dd;margin:10px 0 5px}input,select,textarea{width:100%;padding:11px;border-radius:10px;border:1px solid #344461;background:#0e1527;color:white;font-size:15px}button{border:0;border-radius:13px;padding:13px 10px;font-weight:700;font-size:15px;cursor:pointer;background:#4e74ff;color:white}
+button.secondary{background:#26334e}button.danger{background:#c43b52}button:disabled{opacity:.45}.buttons{display:flex;gap:8px}.buttons button{flex:1}
+.chat{max-height:320px;overflow:auto}.msg{padding:10px 12px;border-radius:13px;margin:8px 0;white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere}.user{background:#263a65;margin-left:12%}.ai{background:#202a40;margin-right:12%}.err{background:#4a2130}.small{font-size:12px;color:#91a2c0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>🤖 AI Voice Conversation</h1>
+<p>बोलकर लगातार बातचीत करें। AI को बीच में रोकने के लिए "रोकें" दबाएँ या गोले को छुएँ।</p>
+<div class="card">
+<div class="status" id="status">Voice Mode बंद है</div>
+<div class="visual"><div id="orb" class="orb"></div></div>
+<div class="buttons"><button id="start">🎙️ चालू</button><button id="stop" class="secondary" disabled>✋ रोकें</button><button id="exit" class="danger" disabled>⏹ Exit</button></div>
+<p class="small" id="hint">माइक केवल चालू बटन दबाने पर शुरू होगा।</p>
+</div>
+<div class="card">
+<h3>⚙️ API सेटिंग</h3>
+<label>API Endpoint (OpenAI-compatible)</label><input id="endpoint" value="https://api.groq.com/openai/v1/chat/completions">
+<label>Model</label><input id="model" value="openai/gpt-oss-120b">
+<label>API Key</label><input id="key" type="password" placeholder="अपनी API key यहाँ डालें" autocomplete="off">
+<p class="small">API key एक बार डालने पर इसी फ़ोन में सेव रहती है (हटाने के लिए खाना खाली करें)। इसे किसी के साथ साझा न करें। ऐप दूसरों को देना हो तो backend proxy इस्तेमाल करें।</p>
+<label>AI निर्देश (System Prompt)</label><textarea id="prompt" rows="3">तुम एक स्मार्ट, दोस्ताना हिंदी और Hinglish बोलने वाले AI साथी हो। जवाब संक्षिप्त, स्पष्ट और प्राकृतिक रखो। Markdown, तालिका या emoji मत लिखो।</textarea>
+<div class="grid">
+<div><label>Voice</label><select id="voice"></select></div>
+<div><label>बोलने की गति</label><input id="rate" type="range" min="0.7" max="1.3" step="0.05" value="1"><span id="rateVal">1.00×</span></div>
+</div>
+<label>आवाज़ का भारीपन (कम = भारी robot)</label><input id="pitch" type="range" min="0.1" max="1.5" step="0.05" value="0.4">
+<label>Speech Recognition भाषा</label><select id="lang"><option value="hi-IN">हिंदी (India)</option><option value="en-IN">English (India)</option><option value="en-US">English (US)</option></select>
+</div>
+<div class="card"><h3>💬 बातचीत</h3><div class="chat" id="chat"></div>
+<label>टेक्स्ट से भी भेजें</label><input id="typed" placeholder="अपना संदेश लिखें..."><div class="buttons" style="margin-top:10px"><button id="send" class="secondary">Send</button><button id="clear" class="secondary">Clear chat</button></div></div>
+<p class="small">Voice Recognition आमतौर पर Chrome में बेहतर चलता है और इंटरनेट माँगता है।</p>
+</div>
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const TTS=('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window)?window.speechSynthesis:null;
+const MAX_HISTORY=1000;
+// turn बदलते ही पुराना जवाब, आवाज़ और timer बेअसर हो जाते हैं
+let active=false,busy=false,turn=0,rec=null,controller=null,restartTimer=null,voices=[],history=[],netErrors=0;
+
+// सेटिंग इसी फ़ोन के ब्राउज़र में सेव होती है
+const SAVED=['endpoint','model','key','prompt','voice','rate','lang','pitch'];
+function load(id){try{return localStorage.getItem('aivc_'+id)}catch(e){return null}}
+function save(id){try{localStorage.setItem('aivc_'+id,$(id).value)}catch(e){hint('यह ब्राउज़र सेटिंग सेव नहीं कर पा रहा।')}}
+SAVED.forEach(id=>{const v=load(id);if(v!==null&&id!=='voice')$(id).value=v;$(id).addEventListener('input',()=>save(id));$(id).addEventListener('change',()=>save(id))});
+
+function setState(label,cls=''){$('status').textContent=label;$('orb').className='orb '+cls}
+function hint(t){$('hint').textContent=t}
+function idle(){if(!active)setState('Voice Mode बंद है')}
+function buttons(){$('start').disabled=active;$('exit').disabled=!active;$('stop').disabled=!busy;$('send').disabled=busy}
+function addMsg(type,text){const d=document.createElement('div');d.className='msg '+type;d.textContent=(type==='user'?'🧑 ':type==='ai'?'🤖 ':'⚠️ ')+text;$('chat').appendChild(d);$('chat').scrollTop=$('chat').scrollHeight}
+
+function loadVoices(){
+  if(!TTS)return;
+  const old=$('voice').value;voices=TTS.getVoices();$('voice').innerHTML='';
+  voices.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name+' ('+v.lang+')';$('voice').appendChild(o)});
+  const pick=voices.find(v=>v.name===old)||voices.find(v=>/hi[-_]IN|Hindi/i.test(v.lang+' '+v.name));
+  const want=voices.find(v=>v.name===load('voice'))||pick;
+  if(want)$('voice').value=want.name;
+}
+if(TTS){TTS.onvoiceschanged=loadVoices;loadVoices()}
+$('rateVal').textContent=Number($('rate').value).toFixed(2)+'×';
+$('rate').oninput=()=>{$('rateVal').textContent=Number($('rate').value).toFixed(2)+'×'};
+
+function clean(t){return t.replace(/```[\s\S]*?```/g,' कोड स्क्रीन पर है। ').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*_#`>|~]/g,'').replace(/\s+/g,' ').trim()}
+// लंबे जवाब छोटे टुकड़ों में, ताकि आवाज़ बीच में न कटे
+function chunks(t){
+  const out=[];let cur='';
+  for(const word of t.split(' ')){
+    if(cur&&(cur+' '+word).length>160){out.push(cur);cur=word}else cur=cur?cur+' '+word:word;
+    if(/[।.?!]$/.test(word)&&cur.length>60){out.push(cur);cur=''}
+  }
+  if(cur)out.push(cur);return out;
+}
+function speak(text,id){
+  if(!TTS){hint('इस ब्राउज़र में आवाज़ समर्थित नहीं है, जवाब स्क्रीन पर पढ़ें।');return Promise.resolve()}
+  const parts=chunks(clean(text));
+  return new Promise(resolve=>{
+    let i=0;
+    const next=()=>{
+      if(id!==turn||i>=parts.length){resolve();return}
+      const u=new SpeechSynthesisUtterance(parts[i++]);
+      const v=voices.find(x=>x.name===$('voice').value);
+      if(v){u.voice=v;u.lang=v.lang}else u.lang=$('lang').value;
+      u.rate=Number($('rate').value);u.pitch=Number($('pitch').value);
+      let done=false;
+      const finish=()=>{if(done)return;done=true;clearTimeout(guard);next()};
+      // कुछ ब्राउज़र onend नहीं भेजते
+      const guard=setTimeout(finish,6000+u.text.length*200);
+      u.onend=finish;u.onerror=finish;
+      TTS.speak(u);
+    };
+    setState('Speaking','speak');next();
+  });
+}
+
+function stopListening(){
+  clearTimeout(restartTimer);
+  if(rec){const r=rec;rec=null;r.onresult=r.onerror=r.onend=null;try{r.abort()}catch(e){}}
+}
+function listen(delay=300){
+  stopListening();
+  if(!active||busy)return;
+  restartTimer=setTimeout(()=>{
+    if(!active||busy)return;
+    const r=new SR();rec=r;r.lang=$('lang').value;r.continuous=false;r.interimResults=true;
+    r.onstart=()=>setState('Listening','listen');
+    r.onresult=ev=>{
+      let fin='',tmp='';
+      for(let i=0;i<ev.results.length;i++){const x=ev.results[i];if(x.isFinal)fin+=x[0].transcript;else tmp+=x[0].transcript}
+      netErrors=0;
+      if(fin.trim()){stopListening();send(fin.trim())}else if(tmp)hint('सुन रहा हूँ: '+tmp);
+    };
+    r.onerror=ev=>{
+      if(ev.error==='no-speech'||ev.error==='aborted')return;
+      const fatal={'not-allowed':'माइक की अनुमति नहीं मिली। Browser Settings में अनुमति दें।','service-not-allowed':'यह ब्राउज़र voice service की अनुमति नहीं दे रहा।','audio-capture':'माइक्रोफोन नहीं मिला।','language-not-supported':'चुनी हुई भाषा समर्थित नहीं है।'}[ev.error];
+      if(fatal){exitVoice();hint(fatal);return}
+      netErrors++;hint('Voice त्रुटि: '+ev.error+(ev.error==='network'?' (इंटरनेट जाँचें)':''));
+      if(netErrors>=3){exitVoice();hint('Voice बार-बार विफल हुई ('+ev.error+')। इंटरनेट जाँचकर दोबारा चालू करें।')}
+    };
+    r.onend=()=>{if(rec===r){rec=null;listen(500)}};
+    try{r.start()}catch(e){rec=null;exitVoice();hint('माइक शुरू नहीं हुआ: '+e.message)}
+  },delay);
+}
+
+function cancelTurn(){
+  turn++;busy=false;
+  if(controller){controller.abort();controller=null}
+  if(TTS)TTS.cancel();
+}
+function interrupt(){if(!busy)return;cancelTurn();buttons();if(active)listen();else idle()}
+function exitVoice(){active=false;stopListening();cancelTurn();buttons();setState('Voice Mode बंद है');hint('माइक बंद है।')}
+
+async function send(text){
+  if(!text||busy)return false;
+  const endpoint=$('endpoint').value.trim(),key=$('key').value.trim(),model=$('model').value.trim();
+  if(!endpoint||!key||!model){addMsg('err','API Endpoint, Model और API Key भरें।');return false}
+  const id=++turn;busy=true;stopListening();if(TTS)TTS.cancel();buttons();
+  addMsg('user',text);setState('Thinking','think');hint('जवाब बन रहा है...');
+  const ctl=new AbortController();controller=ctl;
+  const timeout=setTimeout(()=>ctl.abort(),30000);
+  const userMsg={role:'user',content:text};
+  try{
+    const body={model,messages:[{role:'system',content:$('prompt').value},...history.slice(-MAX_HISTORY),userMsg],temperature:0.7};
+    if(model.startsWith('openai/gpt-oss'))body.reasoning_effort='low';
+    const r=await fetch(endpoint,{method:'POST',signal:ctl.signal,headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},body:JSON.stringify(body)});
+    if(!r.ok){
+      const detail=(await r.text()).slice(0,300);
+      const why={401:'API key गलत है।',404:'Model या Endpoint नहीं मिला।',429:'Limit पूरी हो गई, थोड़ी देर बाद कोशिश करें।'}[r.status]||'';
+      throw new Error('API त्रुटि '+r.status+' '+why+'\n'+detail);
+    }
+    const data=await r.json();const reply=data.choices?.[0]?.message?.content?.trim();
+    if(!reply)throw new Error('API से जवाब नहीं मिला।');
+    if(id!==turn)return true;
+    history.push(userMsg,{role:'assistant',content:reply});history=history.slice(-MAX_HISTORY);
+    addMsg('ai',reply);hint('');
+    if(active){hint('बीच में रोकने के लिए "रोकें" दबाएँ।');await speak(reply,id)}
+  }catch(err){
+    if(id!==turn)return true;
+    const msg=err.name==='AbortError'?'30 सेकंड में जवाब नहीं आया।':err.message==='Failed to fetch'?'नेटवर्क त्रुटि। इंटरनेट और Endpoint जाँचें।':err.message;
+    addMsg('err',msg);hint('त्रुटि आई, नीचे चैट में देखें।');
+  }finally{clearTimeout(timeout)}
+  if(id!==turn)return true;
+  busy=false;controller=null;buttons();
+  if(active){hint('अब बोलें।');listen()}else idle();
+  return true;
+}
+
+$('start').onclick=()=>{
+  if(!SR){hint('इस ब्राउज़र में Speech Recognition नहीं है। Chrome में खोलें या टेक्स्ट चैट इस्तेमाल करें।');return}
+  if(!$('key').value.trim()){hint('पहले API Key भरें।');$('key').focus();return}
+  cancelTurn();active=true;netErrors=0;buttons();hint('अब बोलें।');listen(0);
+};
+$('exit').onclick=exitVoice;
+$('stop').onclick=interrupt;
+$('orb').onclick=interrupt;
+$('lang').onchange=()=>{if(active&&!busy)listen()};
+function sendTyped(){
+  const t=$('typed').value.trim();
+  if(!t||busy)return;
+  if($('key').value.trim()&&$('model').value.trim()&&$('endpoint').value.trim())$('typed').value='';
+  send(t);
+}
+$('send').onclick=sendTyped;
+$('typed').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing)sendTyped()});
+$('clear').onclick=()=>{cancelTurn();history=[];$('chat').innerHTML='';buttons();if(active)listen();else idle()};
+})();
+</script>
+</body>
+</html>
